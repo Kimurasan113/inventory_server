@@ -11,6 +11,10 @@ connectDB();
 
 const app = express();
 
+// ⭐⭐ အရေးကြီးဆုံး - trust proxy ကို ဖွင့်ပေးရမယ် ⭐⭐
+// Render က proxy နောက်ကွယ်မှာရှိတဲ့အတွက် ဒါလေးထည့်ပေးရမယ်
+app.set('trust proxy', 1);
+
 // 1. Security Middleware
 app.use(helmet());
 
@@ -20,6 +24,9 @@ const authLimiter = rateLimit({
   max: 10, // ၁၀ ကြိမ်ပဲ ကြိုးစားခွင့်ရှိ
   skipSuccessfulRequests: true, // အောင်မြင်တဲ့ requests တွေကို မရေတွက်စေနဲ့
   message: { success: false, message: "Too many login attempts, try later" },
+  // ⭐ optional: keyGenerator ကို customize လုပ်ချင်ရင် ဒီမှာထည့်လို့ရ
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
 });
 
 // 3. CORS
