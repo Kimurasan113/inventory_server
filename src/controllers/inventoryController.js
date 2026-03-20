@@ -20,7 +20,6 @@ exports.getAll = async (req, res, next) => {
     
     const inventory = await service.getAllInventory(filter);
     
-    // If includeStats=true, add statistics to each item
     if (req.query.includeStats === 'true') {
       const inventoryWithStats = inventory.map(item => ({
         ...item.toObject(),
@@ -191,15 +190,122 @@ exports.getValuation = async (req, res, next) => {
   }
 };
 
+// ==================== CATEGORY CONTROLLERS ====================
+
+/**
+ * GET /api/inventory/categories
+ * Get all distinct categories with item counts
+ */
+exports.getAllCategories = async (req, res, next) => {
+  try {
+    const categories = await service.getAllCategories();
+    
+    res.json({
+      success: true,
+      count: categories.length,
+      data: categories
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * GET /api/inventory/categories/summary
+ * Get category summary with statistics
+ */
+exports.getCategorySummary = async (req, res, next) => {
+  try {
+    const summary = await service.getCategorySummary();
+    
+    res.json({
+      success: true,
+      count: summary.length,
+      data: summary
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * GET /api/inventory/categories/performance
+ * Get category performance report
+ */
+exports.getCategoryPerformance = async (req, res, next) => {
+  try {
+    const performance = await service.getCategoryPerformance();
+    
+    res.json({
+      success: true,
+      count: performance.length,
+      data: performance
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /api/inventory/categories/filter
+ * Get inventory filtered by multiple categories
+ */
+exports.getByMultipleCategories = async (req, res, next) => {
+  try {
+    const { categories, sortBy, search, includeStats, includeBatches } = req.body;
+    
+    if (!categories || !Array.isArray(categories) || categories.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide an array of categories"
+      });
+    }
+    
+    const options = {
+      sortBy: sortBy || 'name',
+      search: search || null,
+      includeStats: includeStats === true,
+      includeBatches: includeBatches === true
+    };
+    
+    const result = await service.getInventoryByMultipleCategories(categories, options);
+    
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 /**
  * GET /api/inventory/category/:category
- * Get inventory by category
+ * Get inventory by category (enhanced)
+ * Query params:
+ *   ?sortBy=name|value|quantity|date
+ *   ?search=keyword
+ *   ?includeStats=true
+ *   ?includeBatches=true
  */
 exports.getByCategory = async (req, res, next) => {
   try {
     const { category } = req.params;
+    const { 
+      sortBy, 
+      search, 
+      includeStats = 'false', 
+      includeBatches = 'false' 
+    } = req.query;
     
-    const result = await service.getInventoryByCategory(category);
+    const options = {
+      sortBy: sortBy || 'name',
+      search: search || null,
+      includeStats: includeStats === 'true',
+      includeBatches: includeBatches === 'true'
+    };
+    
+    const result = await service.getInventoryByCategory(category, options);
     
     res.json({
       success: true,
@@ -253,7 +359,6 @@ exports.getLossSummary = async (req, res, next) => {
       summary.totalExpireQty += item.totalExpireQty;
       summary.totalLossValue += item.totalLossValue;
       
-      // Category summary
       const cat = item.item.category;
       if (!summary.byCategory[cat]) {
         summary.byCategory[cat] = {
@@ -268,7 +373,6 @@ exports.getLossSummary = async (req, res, next) => {
       summary.byCategory[cat].expireQty += item.totalExpireQty;
       summary.byCategory[cat].lossValue += item.totalLossValue;
       
-      // Item list (only items with losses)
       if (item.totalLossQty > 0) {
         summary.items.push({
           id: item._id,
@@ -298,9 +402,6 @@ exports.getLossSummary = async (req, res, next) => {
  */
 exports.update = async (req, res, next) => {
   try {
-    // Optional: add role check (admin only)
-    // if (req.user.role !== 'admin') throw new Error('Unauthorized');
-    
     const inventory = await service.updateInventory(req.params.id, req.body);
     
     res.json({
@@ -319,11 +420,6 @@ exports.update = async (req, res, next) => {
  */
 exports.adjust = async (req, res, next) => {
   try {
-    // Check if user has permission
-    // if (!['storekeeper', 'admin'].includes(req.user.role)) {
-    //   throw new Error('Unauthorized');
-    // }
-    
     const { baseQty, damageQty, lostQty, expireQty, unitPrice } = req.body;
     
     const adjustments = {};
@@ -351,7 +447,6 @@ exports.adjust = async (req, res, next) => {
  */
 exports.delete = async (req, res, next) => {
   try {
-    // if (req.user.role !== 'admin') throw new Error('Unauthorized');
     await service.deleteInventory(req.params.id);
     
     res.json({

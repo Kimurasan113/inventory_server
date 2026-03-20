@@ -76,9 +76,60 @@ router.get(
   inventoryController.getLossSummary
 );
 
+// ==================== CATEGORY ROUTES ====================
+
+/**
+ * @route   GET /api/inventory/categories
+ * @desc    Get all distinct categories with item counts and stats
+ * @access  Storekeeper, Admin, User, Supplier
+ */
+router.get(
+  "/categories",
+  authorize("Storekeeper", "Admin", "User", "Supplier"),
+  inventoryController.getAllCategories
+);
+
+/**
+ * @route   GET /api/inventory/categories/summary
+ * @desc    Get category summary with detailed statistics
+ * @access  Storekeeper, Admin
+ */
+router.get(
+  "/categories/summary",
+  authorize("Storekeeper", "Admin"),
+  inventoryController.getCategorySummary
+);
+
+/**
+ * @route   GET /api/inventory/categories/performance
+ * @desc    Get category performance report (value, loss, stock health)
+ * @access  Storekeeper, Admin
+ */
+router.get(
+  "/categories/performance",
+  authorize("Storekeeper", "Admin"),
+  inventoryController.getCategoryPerformance
+);
+
+/**
+ * @route   POST /api/inventory/categories/filter
+ * @desc    Get inventory filtered by multiple categories
+ * @access  Storekeeper, Admin, User, Supplier
+ * @body    { categories: ["Beverage", "Food"], sortBy: "value", search: "coke", includeStats: true, includeBatches: false }
+ */
+router.post(
+  "/categories/filter",
+  authorize("Storekeeper", "Admin", "User", "Supplier"),
+  inventoryController.getByMultipleCategories
+);
+
 /**
  * @route   GET /api/inventory/category/:category
- * @desc    Get inventory by category
+ * @desc    Get inventory by category (enhanced)
+ * @query   ?sortBy=name|value|quantity|date
+ * @query   ?search=keyword
+ * @query   ?includeStats=true
+ * @query   ?includeBatches=true
  * @access  Storekeeper, Admin, User, Supplier
  */
 router.get(

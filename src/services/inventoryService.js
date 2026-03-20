@@ -7,7 +7,7 @@ const Inventory = require("../models/inventoryModel");
 const getAllInventory = async (filter = {}) => {
   return await Inventory.find(filter)
     .populate("item.itemId", "name code category")
-    .sort({ createdAt: -1 }); // အသစ်ထည့်တဲ့ဟာ အရင်ပေါ်
+    .sort({ createdAt: -1 });
 };
 
 /**
@@ -38,7 +38,7 @@ const getLowStockItems = async (threshold = 10) => {
       unit: inv.item.unit,
       status: inv.availableQty === 0 ? 'OUT_OF_STOCK' : 'LOW_STOCK'
     }))
-    .sort((a, b) => a.availableQty - b.availableQty); // အနည်းဆုံးအရင်ပေါ်
+    .sort((a, b) => a.availableQty - b.availableQty);
 };
 
 /**
@@ -52,7 +52,7 @@ const getExpiringBatches = async (days = 30) => {
   const futureDate = new Date();
   futureDate.setDate(futureDate.getDate() + days);
   const today = new Date();
-  today.setHours(0, 0, 0, 0); // ဒီနေ့ နေ့လယ် ၁၂ နာရီ
+  today.setHours(0, 0, 0, 0);
   
   inventories.forEach(inv => {
     inv.batches.forEach(batch => {
@@ -71,16 +71,13 @@ const getExpiringBatches = async (days = 30) => {
           expiryDate: batch.expiryDate,
         };
         
-        // သက်တမ်းကုန်သွားပြီ
         if (expiryDate < today) {
           expiredItems.push({
             ...batchInfo,
             status: 'EXPIRED',
             daysOverdue: Math.ceil((today - expiryDate) / (1000 * 60 * 60 * 24))
           });
-        }
-        // သက်တမ်းကုန်ခါနီး (days အတွင်း)
-        else if (expiryDate <= futureDate) {
+        } else if (expiryDate <= futureDate) {
           expiringItems.push({
             ...batchInfo,
             daysRemaining: Math.ceil((expiryDate - today) / (1000 * 60 * 60 * 24))
@@ -107,7 +104,7 @@ const getInventoryValuation = async () => {
     totalValue: 0,
     totalCost: 0,
     totalLossValue: 0,
-    totalPotentialLoss: 0, // သက်တမ်းကုန်တော့မယ့်ဟာတွေရဲ့တန်ဖိုး
+    totalPotentialLoss: 0,
     byCategory: {},
     overall: {
       totalBatches: 0,
@@ -124,7 +121,6 @@ const getInventoryValuation = async () => {
     const lossValue = inv.totalLossValue;
     const category = inv.item.category || 'Uncategorized';
     
-    // Category အလိုက်စုစည်း
     if (!summary.byCategory[category]) {
       summary.byCategory[category] = {
         count: 0,
@@ -140,7 +136,6 @@ const getInventoryValuation = async () => {
     summary.byCategory[category].value += value;
     summary.byCategory[category].lossValue += lossValue;
     
-    // သက်တမ်းကုန်ခါနီးတန်ဖိုး (ရက် ၃၀ အတွင်း)
     inv.batches.forEach(batch => {
       if (batch.expiryDate && batch.remainingQty > 0) {
         const daysToExpiry = Math.ceil(
@@ -169,27 +164,315 @@ const getInventoryValuation = async () => {
   return summary;
 };
 
+// ==================== CATEGORY FUNCTIONS ====================
+
 /**
- * Get inventory by category
+ * Get all distinct categories with item counts
  */
-const getInventoryByCategory = async (category) => {
-  const inventories = await Inventory.find({
-    "item.category": category
-  }).populate("item.itemId", "name code");
+const getAllCategories = async () => {
+  const inventories = await Inventory.find();
+  
+  const categoryMap = new Map();
+  
+  inventories.forEach(inv => {
+    const category = inv.item.category || 'Uncategorized';
+    if (!categoryMap.has(category)) {
+      categoryMap.set(category, {
+        name: category,
+        count: 0,
+        totalValue: 0,
+        totalQuantity: 0,
+        totalLossValue: 0
+      });
+    }
+    
+    const cat = categoryMap.get(category);
+    cat.count++;
+    cat.totalValue += inv.totalValue;
+    cat.totalQuantity += inv.availableQty;
+    cat.totalLossValue += inv.totalLossValue;
+  });
+  
+  return Array.from(categoryMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+};
+
+/**
+ * Get category summary with statistics
+ */
+const getCategorySummary = async () => {
+  const inventories = await Inventory.find();
+  
+  const categories = {};
+  
+  inventories.forEach(inv => {
+    const category = inv.item.category || 'Uncategorized';
+    
+    if (!categories[category]) {
+      categories[category] = {
+        name: category,
+        totalItems: 0,
+        totalBatches: 0,
+        totalQuantity: 0,
+        totalValue: 0,
+        totalLossValue: 0,
+        lowStockCount: 0,
+        outOfStockCount: 0
+      };
+    }
+    
+    const cat = categories[category];
+    cat.totalItems++;
+    cat.totalBatches += inv.batches.length;
+    cat.totalQuantity += inv.availableQty;
+    cat.totalValue += inv.totalValue;
+    cat.totalLossValue += inv.totalLossValue;
+    
+    if (inv.availableQty < 10) {
+      if (inv.availableQty === 0) {
+        cat.outOfStockCount++;
+      } else {
+        cat.lowStockCount++;
+      }
+    }
+  });
+  
+  return Object.values(categories).map(cat => ({
+    ...cat,
+    avgValuePerItem: cat.totalItems > 0 ? cat.totalValue / cat.totalItems : 0,
+    lossPercentage: cat.totalValue > 0 
+      ? ((cat.totalLossValue / cat.totalValue) * 100).toFixed(2)
+      : 0,
+    stockHealthPercentage: cat.totalItems > 0
+      ? ((cat.totalItems - cat.lowStockCount - cat.outOfStockCount) / cat.totalItems * 100).toFixed(2)
+      : 0
+  })).sort((a, b) => b.totalValue - a.totalValue);
+};
+
+/**
+ * Get category performance report
+ */
+const getCategoryPerformance = async () => {
+  const inventories = await Inventory.find();
+  
+  const performance = {};
+  
+  inventories.forEach(inv => {
+    const category = inv.item.category || 'Uncategorized';
+    
+    if (!performance[category]) {
+      performance[category] = {
+        name: category,
+        totalItems: 0,
+        totalValue: 0,
+        totalLossValue: 0,
+        bestSellingItem: null,
+        worstPerformingItem: null
+      };
+    }
+    
+    const cat = performance[category];
+    cat.totalItems++;
+    cat.totalValue += inv.totalValue;
+    cat.totalLossValue += inv.totalLossValue;
+    
+    if (!cat.bestSellingItem || inv.totalValue > cat.bestSellingItem.value) {
+      cat.bestSellingItem = {
+        name: inv.item.name,
+        code: inv.item.code,
+        value: inv.totalValue
+      };
+    }
+    
+    if (!cat.worstPerformingItem || inv.totalLossValue > cat.worstPerformingItem.lossValue) {
+      cat.worstPerformingItem = {
+        name: inv.item.name,
+        code: inv.item.code,
+        lossValue: inv.totalLossValue
+      };
+    }
+  });
+  
+  return Object.values(performance).map(cat => ({
+    ...cat,
+    lossRate: cat.totalValue > 0 
+      ? ((cat.totalLossValue / cat.totalValue) * 100).toFixed(2)
+      : 0,
+    avgValuePerItem: cat.totalItems > 0 ? cat.totalValue / cat.totalItems : 0
+  })).sort((a, b) => b.totalValue - a.totalValue);
+};
+
+/**
+ * Get inventory by multiple categories
+ */
+const getInventoryByMultipleCategories = async (categories, options = {}) => {
+  const filter = {
+    "item.category": { $in: categories }
+  };
+  
+  if (options.search) {
+    filter.$or = [
+      { "item.name": { $regex: options.search, $options: "i" } },
+      { "item.code": { $regex: options.search, $options: "i" } }
+    ];
+  }
+  
+  let query = Inventory.find(filter).populate("item.itemId", "name code category");
+  
+  if (options.sortBy === 'name') {
+    query = query.sort({ "item.name": 1 });
+  } else if (options.sortBy === 'value') {
+    query = query.sort({ totalValue: -1 });
+  } else if (options.sortBy === 'quantity') {
+    query = query.sort({ availableQty: -1 });
+  }
+  
+  const inventories = await query;
   
   return {
-    category,
+    categories,
     totalItems: inventories.length,
     totalValue: inventories.reduce((sum, inv) => sum + inv.totalValue, 0),
+    totalQuantity: inventories.reduce((sum, inv) => sum + inv.availableQty, 0),
     items: inventories.map(inv => ({
+      id: inv._id,
+      name: inv.item.name,
+      code: inv.item.code,
+      category: inv.item.category,
+      availableQty: inv.availableQty,
+      unit: inv.item.unit,
+      avgPrice: inv.avgUnitPrice,
+      totalValue: inv.totalValue,
+      ...(options.includeBatches && { batches: inv.batches }),
+      ...(options.includeStats && {
+        stats: {
+          totalLossQty: inv.totalLossQty,
+          totalLossValue: inv.totalLossValue,
+          lossPercentage: inv.baseQty > 0 
+            ? ((inv.totalLossQty / inv.baseQty) * 100).toFixed(2)
+            : 0
+        }
+      })
+    }))
+  };
+};
+
+/**
+ * Get inventory by category with enhanced features
+ */
+const getInventoryByCategory = async (category, options = {}) => {
+  if (!category) {
+    throw new Error("Category is required");
+  }
+  
+  const filter = { "item.category": category };
+  
+  if (options.search) {
+    filter.$or = [
+      { "item.name": { $regex: options.search, $options: "i" } },
+      { "item.code": { $regex: options.search, $options: "i" } }
+    ];
+  }
+  
+  let query = Inventory.find(filter).populate("item.itemId", "name code category");
+  
+  if (options.sortBy === 'name') {
+    query = query.sort({ "item.name": 1 });
+  } else if (options.sortBy === 'value') {
+    query = query.sort({ totalValue: -1 });
+  } else if (options.sortBy === 'quantity') {
+    query = query.sort({ availableQty: -1 });
+  } else if (options.sortBy === 'date') {
+    query = query.sort({ createdAt: -1 });
+  }
+  
+  const inventories = await query;
+  
+  const stats = {
+    totalItems: inventories.length,
+    totalValue: 0,
+    totalQuantity: 0,
+    totalLossValue: 0,
+    lowStockCount: 0,
+    outOfStockCount: 0
+  };
+  
+  const items = inventories.map(inv => {
+    stats.totalValue += inv.totalValue;
+    stats.totalQuantity += inv.availableQty;
+    stats.totalLossValue += inv.totalLossValue;
+    
+    if (inv.availableQty < 10) {
+      if (inv.availableQty === 0) {
+        stats.outOfStockCount++;
+      } else {
+        stats.lowStockCount++;
+      }
+    }
+    
+    const item = {
       id: inv._id,
       name: inv.item.name,
       code: inv.item.code,
       availableQty: inv.availableQty,
       unit: inv.item.unit,
       avgPrice: inv.avgUnitPrice,
-      totalValue: inv.totalValue
-    }))
+      totalValue: inv.totalValue,
+    };
+    
+    if (options.includeStats) {
+      item.stats = {
+        totalLossQty: inv.totalLossQty,
+        totalLossValue: inv.totalLossValue,
+        damageQty: inv.totalDamageQty,
+        lostQty: inv.totalLostQty,
+        expireQty: inv.totalExpireQty,
+        lossPercentage: inv.baseQty > 0 
+          ? ((inv.totalLossQty / inv.baseQty) * 100).toFixed(2)
+          : 0
+      };
+    }
+    
+    if (options.includeBatches) {
+      item.batches = inv.batches.map(b => ({
+        batchNumber: b.batchNumber,
+        quantity: b.quantity,
+        remainingQty: b.remainingQty,
+        unitPrice: b.unitPrice,
+        expiryDate: b.expiryDate,
+        supplier: b.supplier,
+        receivedDate: b.receivedDate,
+        damageQty: b.damageQty,
+        lostQty: b.lostQty,
+        expireQty: b.expireQty
+      }));
+    }
+    
+    return item;
+  });
+  
+  const categoryStats = {
+    name: category,
+    totalItems: stats.totalItems,
+    totalValue: stats.totalValue,
+    totalQuantity: stats.totalQuantity,
+    totalLossValue: stats.totalLossValue,
+    lowStockCount: stats.lowStockCount,
+    outOfStockCount: stats.outOfStockCount,
+    healthyStockCount: stats.totalItems - stats.lowStockCount - stats.outOfStockCount,
+    avgValuePerItem: stats.totalItems > 0 ? stats.totalValue / stats.totalItems : 0,
+    lossPercentage: stats.totalValue > 0 
+      ? ((stats.totalLossValue / stats.totalValue) * 100).toFixed(2)
+      : 0,
+    stockHealthPercentage: stats.totalItems > 0
+      ? ((stats.totalItems - stats.lowStockCount - stats.outOfStockCount) / stats.totalItems * 100).toFixed(2)
+      : 0
+  };
+  
+  return {
+    category,
+    stats: categoryStats,
+    items,
+    ...(options.includeStats && { lossStats: stats.totalLossValue })
   };
 };
 
@@ -214,7 +497,6 @@ const getInventoryDashboard = async () => {
     stats.totalValue += inv.totalValue;
     stats.totalLossValue += inv.totalLossValue;
     
-    // Low stock check
     if (inv.availableQty < 10) {
       if (inv.availableQty === 0) {
         stats.outOfStockCount++;
@@ -223,7 +505,6 @@ const getInventoryDashboard = async () => {
       }
     }
     
-    // Expiry check
     inv.batches.forEach(batch => {
       if (batch.expiryDate && batch.remainingQty > 0) {
         const daysToExpiry = Math.ceil(
@@ -237,7 +518,6 @@ const getInventoryDashboard = async () => {
       }
     });
     
-    // Category stats
     const cat = inv.item.category;
     if (!stats.categoryStats[cat]) {
       stats.categoryStats[cat] = {
@@ -262,12 +542,21 @@ const deleteInventory = async (id) => {
 };
 
 module.exports = {
+  // Basic CRUD
   getAllInventory,
   getInventoryById,
+  deleteInventory,
+  
+  // Reports
   getLowStockItems,
   getExpiringBatches,
   getInventoryValuation,
-  getInventoryByCategory,
   getInventoryDashboard,
-  deleteInventory,
+  
+  // Category functions
+  getAllCategories,
+  getCategorySummary,
+  getCategoryPerformance,
+  getInventoryByMultipleCategories,
+  getInventoryByCategory,
 };
