@@ -39,7 +39,7 @@ const isPasswordStrong = (password) => {
 class AuthService {
   // -------------------- Register --------------------
   async register(data) {
-    const { username, password, confirmPassword, email, phone, department } =
+    const { username, password, confirmPassword, email, phone, department,gender } =
       data;
 
     if (!username || !password || !email || !phone || !department) {
@@ -76,6 +76,7 @@ class AuthService {
       phone,
       department,
       password: hashedPassword,
+      gender: gender
     });
 
     return { message: "Registered successfully. Wait for approval." };
