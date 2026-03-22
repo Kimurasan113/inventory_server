@@ -1,4 +1,5 @@
 const { body, validationResult } = require("express-validator");
+const { errorResponse } = require("../utils/responseFormatter");
 
 // Password strength validation (throws error if weak)
 const isStrongPassword = (value) => {
@@ -24,13 +25,14 @@ const isStrongPassword = (value) => {
 const handleValidationErrors = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    return res.status(400).json({ 
-      success: false, 
-      errors: errors.array().map(err => ({
+    return res.status(400).json(errorResponse(
+      "Validation failed", 
+      errors.array().map(err => ({
         field: err.param,
         message: err.msg
-      }))
-    });
+      })),
+      400
+    ));
   }
   next();
 };
