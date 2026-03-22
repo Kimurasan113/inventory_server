@@ -1,63 +1,18 @@
 const User = require("../models/userModel");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
-const jwt = require("jsonwebtoken"); 
+const { isStrongPassword } = require('../middleWare/validationMiddleWare');
 const {
   generateAccessToken,
   generateRefreshToken,
 } = require("../utils/generateToken");
-// Helper function - class အပြင်မှာထုတ်
-const isPasswordStrong = (password) => {
-  const hasUpperCase = /[A-Z]/.test(password);
-  const hasLowerCase = /[a-z]/.test(password);
-  const hasNumbers = /\d/.test(password);
-  const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(password);
 
-  return {
-    isValid:
-      hasUpperCase &&
-      hasLowerCase &&
-      hasNumbers &&
-      hasSpecialChar &&
-      password.length >= 8,
-    errors: {
-      length:
-        password.length < 8 ? "Password must be at least 8 characters" : null,
-      uppercase: !hasUpperCase
-        ? "Password must contain at least one uppercase letter"
-        : null,
-      lowercase: !hasLowerCase
-        ? "Password must contain at least one lowercase letter"
-        : null,
-      number: !hasNumbers ? "Password must contain at least one number" : null,
-      specialChar: !hasSpecialChar
-        ? "Password must contain at least one special character"
-        : null,
-    },
-  };
-};
 class AuthService {
   // -------------------- Register --------------------
   async register(data) {
-    const { username, password, confirmPassword, email, phone, department,gender } =
-      data;
+    const { username, password, email, phone, department, gender } = data;
 
-    if (!username || !password || !email || !phone || !department) {
-      throw new Error("All fields are required");
-    }
-    if (password !== confirmPassword) {
-      throw new Error("Passwords do not match");
-    }
-
-    // ✅ FIXED: တိုက်ရိုက်ခေါ်သုံးတယ် (this မပါ)
-    const passwordCheck = isPasswordStrong(password);
-    if (!passwordCheck.isValid) {
-      const errors = Object.values(passwordCheck.errors).filter(
-        (e) => e !== null,
-      );
-      throw new Error("Password too weak: " + errors.join(", "));
-    }
-
+    // Check if user already exists
     const existing = await User.findOne({
       $or: [
         { username: username.toLowerCase() },
@@ -66,20 +21,32 @@ class AuthService {
       ],
     });
 
-    if (existing) throw new Error("User already exists");
+    if (existing) {
+      throw new Error("User already exists");
+    }
 
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    await User.create({
+    const user = await User.create({
       username: username.toLowerCase(),
       email: email.toLowerCase(),
       phone,
       department,
       password: hashedPassword,
-      gender: gender
+      gender: gender,
+      status: "Pending",
+      role: "User"
     });
 
-    return { message: "Registered successfully. Wait for approval." };
+    return { 
+      message: "Registered successfully. Wait for approval.",
+      user: {
+        id: user._id,
+        username: user.username,
+        email: user.email,
+        status: user.status
+      }
+    };
   }
 
   // -------------------- Change Password --------------------
@@ -89,15 +56,6 @@ class AuthService {
 
     const isMatch = await bcrypt.compare(currentPassword, user.password);
     if (!isMatch) throw new Error("Current password is incorrect");
-
-    // ✅ FIXED: တိုက်ရိုက်ခေါ်သုံးတယ် (this မပါ)
-    const passwordCheck = isPasswordStrong(newPassword);
-    if (!passwordCheck.isValid) {
-      const errors = Object.values(passwordCheck.errors).filter(
-        (e) => e !== null,
-      );
-      throw new Error("Password too weak: " + errors.join(", "));
-    }
 
     const hashedPassword = await bcrypt.hash(newPassword, 12);
     user.password = hashedPassword;
@@ -116,13 +74,11 @@ class AuthService {
 
     if (!user) throw new Error("Invalid or expired token");
 
-    // ✅ FIXED: တိုက်ရိုက်ခေါ်သုံးတယ် (this မပါ)
-    const passwordCheck = isPasswordStrong(newPassword);
-    if (!passwordCheck.isValid) {
-      const errors = Object.values(passwordCheck.errors).filter(
-        (e) => e !== null,
-      );
-      throw new Error("Password too weak: " + errors.join(", "));
+    // Validate password strength
+    try {
+      isStrongPassword(newPassword);
+    } catch (error) {
+      throw new Error(`Password too weak: ${error.message}`);
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 12);
@@ -135,20 +91,27 @@ class AuthService {
   }
 
   // -------------------- Login --------------------
-  async login({ username, password }, ip) {
+  async login({ username, password }, ip, userAgent) {
     const user = await User.findOne({
-      username: username.toLowerCase(),
+      $or: [
+        { username: username.toLowerCase() },
+        { email: username.toLowerCase() }
+      ]
     }).select("+password +failedLoginAttempts +lockUntil");
 
     if (!user) throw new Error("Invalid credentials");
     if (user.status !== "Approved") throw new Error("Account not approved yet");
 
+    // Check if account is locked
     if (user.lockUntil && user.lockUntil > Date.now()) {
       const remainingSeconds = Math.ceil((user.lockUntil - Date.now()) / 1000);
       throw new Error(
-        `Account temporarily locked. Try again in ${remainingSeconds} seconds.`,
+        `Account temporarily locked. Try again in ${remainingSeconds} seconds.`
       );
-    } else if (user.lockUntil && user.lockUntil <= Date.now()) {
+    }
+
+    // Reset lock if expired
+    if (user.lockUntil && user.lockUntil <= Date.now()) {
       user.failedLoginAttempts = 0;
       user.lockUntil = undefined;
       await user.save();
@@ -164,12 +127,15 @@ class AuthService {
       throw new Error("Invalid credentials");
     }
 
-    // ✅ Reset login attempts
+    // Reset login attempts on success
     user.failedLoginAttempts = 0;
     user.lockUntil = undefined;
     user.isOnline = true;
+    user.lastLoginIP = ip;
+    user.lastLoginAt = new Date();
+    user.lastLoginUserAgent = userAgent;
 
-    // -------------------- Refresh Token --------------------
+    // Generate tokens
     const refreshToken = generateRefreshToken(user);
     const hashedRefreshToken = crypto
       .createHash("sha256")
@@ -177,20 +143,33 @@ class AuthService {
       .digest("hex");
 
     user.refreshToken = hashedRefreshToken;
-    user.refreshTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-  
+    user.refreshTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    
+    // Track session
+    if (!user.sessions) user.sessions = [];
+    user.sessions.push({
+      token: hashedRefreshToken,
+      ip,
+      userAgent,
+      createdAt: new Date()
+    });
+    
+    // Keep only last 5 sessions
+    if (user.sessions.length > 5) {
+      user.sessions = user.sessions.slice(-5);
+    }
+    
     await user.save();
 
     const accessToken = generateAccessToken(user);
 
-  
- 
     return {
       accessToken,
-      refreshToken, // send plain token to client
+      refreshToken,
       user: {
         id: user._id,
         username: user.username,
+        email: user.email,
         role: user.role,
         status: user.status,
       },
@@ -198,17 +177,17 @@ class AuthService {
   }
 
   // -------------------- Refresh Token --------------------
-  async refreshToken(tokenFromClient) {
+  async refreshToken(tokenFromClient, ip, userAgent) {
     const hashedToken = crypto
       .createHash("sha256")
       .update(tokenFromClient)
       .digest("hex");
 
     const user = await User.findOne({ refreshToken: hashedToken }).select(
-      "+refreshToken",
+      "+refreshToken"
     );
+    
     if (!user) throw new Error("Invalid refresh token");
-
     if (user.refreshTokenExpires < Date.now())
       throw new Error("Refresh token expired");
 
@@ -219,59 +198,106 @@ class AuthService {
       .update(newRefreshToken)
       .digest("hex");
 
+    // Rotate refresh token
     user.refreshToken = newHashedToken;
-   
     user.refreshTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    
+    // Update session
+    if (user.sessions) {
+      const sessionIndex = user.sessions.findIndex(s => s.token === hashedToken);
+      if (sessionIndex !== -1) {
+        user.sessions[sessionIndex].token = newHashedToken;
+        user.sessions[sessionIndex].updatedAt = new Date();
+      }
+    }
+    
     await user.save();
 
     return { accessToken: newAccessToken, refreshToken: newRefreshToken };
   }
 
   // -------------------- Logout --------------------
-  async logout(userId) {
-    await User.findByIdAndUpdate(
-      userId,
-      {
-        isOnline: false,
-        refreshToken: null,
-        refreshTokenExpires: null,
-      },
-      { returnDocument: "after" },
-    );
+  async logout(userId, token) {
+    const user = await User.findById(userId);
+    if (!user) throw new Error("User not found");
+    
+    // Remove specific session or all sessions
+    if (token) {
+      const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+      if (user.sessions) {
+        user.sessions = user.sessions.filter(s => s.token !== hashedToken);
+      }
+      if (user.refreshToken === hashedToken) {
+        user.refreshToken = null;
+        user.refreshTokenExpires = null;
+      }
+    } else {
+      // Logout from all devices
+      user.refreshToken = null;
+      user.refreshTokenExpires = null;
+      user.sessions = [];
+    }
+    
+    user.isOnline = false;
+    await user.save();
+    
     return { message: "Logged out successfully" };
   }
 
   // -------------------- Get Profile --------------------
   async getProfile(userId) {
-    const user = await User.findById(userId).select("-password");
+    const user = await User.findById(userId).select("-password -refreshToken -sessions");
     if (!user) throw new Error("User not found");
     return user;
   }
 
   // -------------------- Forgot Password --------------------
-  async forgotPassword(email) {
+  async forgotPassword(email, ip) {
     const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) throw new Error("User not found");
 
+    // Check rate limiting
+    const recentRequests = user.passwordResetRequests || [];
+    const recentCount = recentRequests.filter(
+      r => r.createdAt > new Date(Date.now() - 15 * 60 * 1000)
+    ).length;
+    
+    if (recentCount >= 3) {
+      throw new Error("Too many requests. Please try again later.");
+    }
+
     const resetToken = crypto.randomBytes(32).toString("hex");
-    user.resetPasswordToken = crypto
-      .createHash("sha256")
-      .update(resetToken)
-      .digest("hex");
+    const hashedToken = crypto.createHash("sha256").update(resetToken).digest("hex");
+    
+    user.resetPasswordToken = hashedToken;
     user.resetPasswordExpires = Date.now() + 10 * 60 * 1000;
+    
+    // Track reset requests
+    if (!user.passwordResetRequests) user.passwordResetRequests = [];
+    user.passwordResetRequests.push({
+      token: hashedToken,
+      ip,
+      createdAt: new Date()
+    });
+    
+    // Keep only last 10 requests
+    if (user.passwordResetRequests.length > 10) {
+      user.passwordResetRequests = user.passwordResetRequests.slice(-10);
+    }
+    
     await user.save();
 
     const resetURL = `${process.env.CLIENT_URL}/reset-password/${resetToken}`;
+    
+    // TODO: Send email
     console.log("Reset URL:", resetURL);
 
     return { message: "Password reset email sent" };
   }
 
-  //
-
   // -------------------- Get All Users (Admin) --------------------
   async getAllUsers() {
-    return await User.find().select("-password -refreshToken");
+    return await User.find().select("-password -refreshToken -sessions -passwordResetRequests");
   }
 
   // -------------------- Update Status (Admin) --------------------
@@ -279,13 +305,14 @@ class AuthService {
     if (!["Pending", "Approved", "Rejected"].includes(status)) {
       throw new Error("Invalid status");
     }
-    // ✅ Fixed: Changed from { new: true } to { returnDocument: 'after' }
+    
     return await User.findByIdAndUpdate(
       userId,
       { status },
-      { returnDocument: "after" }, // 👈 ဒါကို ပြင်ထား
-    ).select("-password");
+      { returnDocument: "after" }
+    ).select("-password -refreshToken -sessions");
   }
+
   // -------------------- Update User Role (Admin Only) --------------------
   async updateRole(userId, newRole) {
     if (!["Supplier", "User", "Storekeeper", "Admin"].includes(newRole)) {
@@ -295,12 +322,13 @@ class AuthService {
     const user = await User.findByIdAndUpdate(
       userId,
       { role: newRole },
-      { returnDocument: "after" },
-    ).select("-password -refreshToken");
+      { returnDocument: "after" }
+    ).select("-password -refreshToken -sessions");
 
     if (!user) throw new Error("User not found");
     return user;
   }
+
   // -------------------- Update Profile (Own User) --------------------
   async updateProfile(userId, updateData) {
     const allowedFields = ["username", "email", "phone", "department"];
@@ -316,6 +344,11 @@ class AuthService {
       }
     }
 
+    if (Object.keys(filteredData).length === 0) {
+      throw new Error("No valid fields to update");
+    }
+
+    // Check for duplicates
     if (filteredData.email || filteredData.phone || filteredData.username) {
       const existing = await User.findOne({
         _id: { $ne: userId },
@@ -325,19 +358,17 @@ class AuthService {
           filteredData.phone ? { phone: filteredData.phone } : null,
         ].filter(Boolean),
       });
+      
       if (existing) {
-        throw new Error(
-          "Username, email or phone already taken by another user",
-        );
+        throw new Error("Username, email or phone already taken by another user");
       }
     }
 
-    // ✅ Fixed: Changed from { new: true } to { returnDocument: 'after' }
     const user = await User.findByIdAndUpdate(
       userId,
       filteredData,
-      { returnDocument: "after", runValidators: true }, // 👈 ဒါကို ပြင်ထား
-    ).select("-password -refreshToken");
+      { returnDocument: "after", runValidators: true }
+    ).select("-password -refreshToken -sessions");
 
     if (!user) throw new Error("User not found");
     return user;
@@ -347,6 +378,8 @@ class AuthService {
   async deleteUser(userId) {
     const user = await User.findById(userId);
     if (!user) throw new Error("User not found");
+    
+    // Soft delete or hard delete?
     await User.findByIdAndDelete(userId);
     return { message: "User deleted successfully" };
   }
