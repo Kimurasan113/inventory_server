@@ -35,20 +35,29 @@ app.use(cors({
     if (!origin) return callback(null, true);
     const allowedOrigins = [
       process.env.CLIENT_URL,
+      "https://inventory-ui-51an.onrender.com",  // ⭐ သင့် Frontend URL ထည့်ပါ
       "http://localhost:3000",
       "http://localhost:5000",
       "http://127.0.0.1:3000",
       "http://127.0.0.1:5000"
     ].filter(Boolean);
+    
+    // Debug အတွက် log ထုတ်ပါ
+    console.log(`🔍 Origin: ${origin}`);
+    console.log(`📋 Allowed: ${allowedOrigins}`);
+    
     if (allowedOrigins.includes(origin)) {
+      console.log(`✅ CORS allowed for: ${origin}`);
       callback(null, true);
     } else {
+      console.log(`❌ CORS blocked for: ${origin}`);
       callback(new Error("CORS not allowed"));
     }
   },
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
 }));
-
 // 4. Body Parser
 app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: true, limit: "10kb" }));
