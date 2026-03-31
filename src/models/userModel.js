@@ -13,7 +13,7 @@ const UserSchema = new mongoose.Schema(
       type: String,
       required: true,
       minlength: 8,
-      select: false, // အမြဲတမ်း password မပါအောင် သတ်မှတ်
+      select: false,
     },
     email: {
       type: String,
@@ -41,18 +41,18 @@ const UserSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
-    }, // unique မထားတော့ဘူး
+    },
     status: {
       type: String,
       enum: ["Pending", "Approved", "Rejected"],
-      default: "Pending", // စစချင်း Pending
+      default: "Pending",
     },
     isOnline: {
       type: Boolean,
       default: false,
     },
 
-    // 🔐 Security fields (အသစ်ထည့်ထားသည်)
+    // 🔐 Security fields
     refreshToken: {
       type: String,
       select: false,
@@ -66,14 +66,21 @@ const UserSchema = new mongoose.Schema(
     },
     lockUntil: Date,
   },
-  { timestamps: true },
+  { timestamps: true }
 );
 
-UserSchema.index({ email: 1 });
-UserSchema.index({ username: 1 });
-UserSchema.index({ phone: 1 });
+
+
+
 UserSchema.index({ status: 1 });
+
+
 UserSchema.index({ refreshToken: 1 }, { sparse: true });
+
+
 UserSchema.index({ resetPasswordToken: 1 }, { sparse: true });
+
+
+UserSchema.index({ lockUntil: 1 }, { expireAfterSeconds: 0 });
 
 module.exports = mongoose.model("User", UserSchema);
