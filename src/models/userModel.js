@@ -69,4 +69,11 @@ const UserSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+UserSchema.index({ email: 1 });
+UserSchema.index({ username: 1 });
+UserSchema.index({ phone: 1 });
+UserSchema.index({ status: 1 });
+UserSchema.index({ refreshToken: 1 }, { sparse: true });
+UserSchema.index({ resetPasswordToken: 1 }, { sparse: true });
+
 module.exports = mongoose.model("User", UserSchema);
